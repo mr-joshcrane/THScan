@@ -1,7 +1,7 @@
 import json
 
 import pytest
-
+import context
 from hello_world import app
 
 
@@ -62,7 +62,7 @@ def apigw_event():
     }
 
 
-def test_lambda_handler(apigw_event, mocker):
+def test_lambda_handler(apigw_event):
 
     ret = app.lambda_handler(apigw_event, "")
     data = json.loads(ret["body"])
