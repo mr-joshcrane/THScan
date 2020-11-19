@@ -2,7 +2,7 @@ name: Upload Source to S3
 
 on:
   push:
-    branches: alternate*
+    branches: alternate/v0.0.1
 
 jobs:
   deploy:
