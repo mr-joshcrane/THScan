@@ -1,0 +1,11 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "THSCAN"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-1p2xyxn096g84"
+s3_prefix = "THSCAN"
+region = "ap-southeast-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_NAMED_IAM"
+parameter_overrides = "ArtifactsBucketName=\"codepipeline-artifacts\" SourceS3BucketName=\"source-code\" PermanentArtifactBucket=\"permanent-artifacts\""
