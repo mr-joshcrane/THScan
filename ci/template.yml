@@ -145,6 +145,7 @@ Resources:
                       Action:
                         - s3:PutObject*
                         - s3:ListBucket
+                        - s3:GetObject
                       Resource:
                         - !Sub arn:aws:s3:::${PermanentArtifactBucket}
                         - !Sub arn:aws:s3:::${PermanentArtifactBucket}/*
@@ -153,6 +154,8 @@ Resources:
                       Action:
                         - cloudformation:*
                         - iam:*
+                        - lambda:*
+                        - apigateway:*
                       Resource:
                         - "*"               
               - PolicyName: CodeBuildParameterStore
