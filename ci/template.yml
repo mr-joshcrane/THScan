@@ -162,6 +162,32 @@ Resources:
                       Action: 'ssm:GetParameters'
                       Resource: '*'
 
+  GithubS3Access:
+    DependsOn: SourceBucket
+    Type: AWS::IAM::User
+    Properties: 
+      UserName: GithubS3Access
+      Policies:
+        - PolicyName: GithubS3AccessPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject*
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt SourceBucket.Arn
+                  - !Sub ${SourceBucket.Arn}/*
+
+  GithubS3AccessKey:
+    DependsOn: GithubS3Access
+    Type: AWS::IAM::AccessKey
+    Properties: 
+      Serial: 1
+      Status: Active
+      UserName: GithubS3Access
+
   CodePipelineExecutionRole:
       Type: AWS::IAM::Role
       Properties:
@@ -230,3 +256,11 @@ Resources:
                       Resource: 
                         - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/thscan*/*'
                         - !Sub 'arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31'
+Outputs:
+  GithubS3AccessKey:
+    Description: The long lived credential with specific permissions
+    Value: !Ref GithubS3AccessKey
+  
+  GithubS3SecretAccessKey:
+    Description: The long lived credential secret with specific S3 permissions
+    Value: !GetAtt GithubS3AccessKey.SecretAccessKey
