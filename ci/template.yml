@@ -2,33 +2,39 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Creates a Code Pipeline which build/updates with S3 as Source
 
 Parameters:
-  ArtifactsBucketName:
+  PermanentArtifactBucket: 
     Type: String
-    Default: codepipeline-artifacts
-    Description: The name of the S3 bucket which will be created for the artifact storing (unique across all existing bucket names in Amazon S3)
-  SourceS3BucketName:
-    Type: String
-    Default: source-code
-    Description: The name of the S3 bucket which contains the source code
+    Default: permanent-artifacts
+    Description: The name of the S3 bucket which will keep the artifacts permanently
+
   
 Resources:
   PipelineArtifactsBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     Properties:
-      BucketName: !Ref ArtifactsBucketName
       VersioningConfiguration:
         Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
   SourceBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Ref SourceS3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
     DeletionPolicy: Delete
 
   CodeBuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
-      ServiceRole: !Ref CodeBuildRole
+      ServiceRole: !Ref CodeBuildServiceRole
       Name: BuildContainerForHTML
       Artifacts:
         Type: CODEPIPELINE
@@ -40,33 +46,30 @@ Resources:
       Source:
         Type: CODEPIPELINE
       TimeoutInMinutes: 10
-  CodePipeline:
+  
+  Pipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
-      Name: PipelineForStaticWebpageWithHugo
-      ArtifactStore:
-        Type: S3
+      ArtifactStore: 
         Location: !Ref PipelineArtifactsBucket
-      RestartExecutionOnUpdate: true
-      RoleArn: !GetAtt CodePipelineRole.Arn
+        Type: S3
+      Name: thscan-pipeline
+      RoleArn: !GetAtt CodePipelineExecutionRole.Arn
       Stages:
         - Name: Source
           Actions:
-            - Name: Source
-              InputArtifacts: []
+            - Name: SourceCodeRepo
               ActionTypeId:
+              # More info on Possible Values: https://docs.aws.amazon.com/codepipeline/latest/userguide/reference-pipeline-structure.html#action-requirements
                 Category: Source
-                Owner: ThirdParty
-                Version: '1'
-                Provider: GitHub
+                Owner: AWS
+                Provider: S3
+                Version: "1"
+              Configuration:
+                S3Bucket: !Ref SourceBucket
+                S3ObjectKey: source.zip
               OutputArtifacts:
                 - Name: SourceCode
-              Configuration:
-                Owner: !Ref GitHubOwner
-                Repo: !Ref GitHubRepo
-                Branch: !Ref GitHubBranch
-                PollForSourceChanges: false
-                OAuthToken: !Ref GitHubOAuthToken
               RunOrder: 1
         - Name: Build
           Actions:
@@ -75,190 +78,155 @@ Resources:
                 Category: Build
                 Owner: AWS
                 Provider: CodeBuild
-                Version: '1'
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+                EnvironmentVariables: '[{"name":"PIPELINE_STAGE","value":"BUILD","type":"PLAINTEXT"}]'
               InputArtifacts:
                 - Name: SourceCode
               OutputArtifacts:
-                - Name: PublicFiles
-              Configuration:
-                ProjectName: !Ref CodeBuildProject
-              RunOrder: 1
+                - Name: BuildArtifact
         - Name: Deploy
           Actions:
-            - Name: S3Deploy
+            - Name: CodeBuild
               ActionTypeId:
-                Category: Deploy
+                Category: Build
                 Owner: AWS
-                Provider: S3
-                Version: '1'
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+                EnvironmentVariables: '[{"name":"PIPELINE_STAGE","value":"DEPLOY","type":"PLAINTEXT"}]'
               InputArtifacts:
-                - Name: PublicFiles
-              Configuration:
-                BucketName: !Ref TargetS3Bucket
-                Extract: 'true'
-              RunOrder: 1
-            - Name: LambdaDeploy
-              ActionTypeId:
-                Category: Invoke
-                Owner: AWS
-                Provider: Lambda
-                Version: '1'
-              Configuration:
-                FunctionName: invalidateCloudfront
-                UserParameters: !Ref myCloudfrontDist
-              RunOrder: 2
-  
-  CreateCodePipelinePolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: CodePipelineAccess_Hugo
-      Description: "Policy for the Codepipeline for Hugo"
-      Path: "/"
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: VisualEditor0
-            Effect: Allow
-            Action: s3:*
-            Resource: [
-              !Sub 'arn:aws:s3:::${TargetS3Bucket}',
-              !Sub 'arn:aws:s3:::${TargetS3Bucket}/*',
-              !Sub 'arn:aws:s3:::${ArtifactsBucketName}',
-              !Sub 'arn:aws:s3:::${ArtifactsBucketName}/*'
-            ]
-          - Sid: VisualEditor1
-            Effect: Allow
-            Action: logs:*
-            Resource: '*'
-          - Sid: VisualEditor2
-            Effect: Allow
-            Action: codebuild:*
-            Resource: [
-              'arn:aws:codebuild:*:*:project/BuildContainerForHTML',
-              'arn:aws:codebuild:*:*:project/BuildContainerForHTML/*'
-            ]
-          - Sid: VisualEditor3
-            Effect: Allow
-            Action: [
-              'lambda:ListFunctions',
-              'lambda:InvokeFunction'
-            ]
-            Resource: '*'
-  CodePipelineRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: 'CodePipeline_Role'
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          Effect: Allow
-          Principal:
-            Service: codepipeline.amazonaws.com
-          Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - !Ref CreateCodePipelinePolicy
-  CreateCodeBuildPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: CodeBuildAccess_Hugo
-      Description: "Policy for access to logs and Hugo S3 Buckets"
-      Path: "/"
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: VisualEditor0
-            Effect: Allow
-            Action: s3:*
-            Resource: [
-              !Sub 'arn:aws:s3:::${TargetS3Bucket}',
-              !Sub 'arn:aws:s3:::${TargetS3Bucket}/*',
-              !Sub 'arn:aws:s3:::${ArtifactsBucketName}',
-              !Sub 'arn:aws:s3:::${ArtifactsBucketName}/*'
-            ]
-          - Sid: VisualEditor1
-            Effect: Allow
-            Action: logs:*
-            Resource: '*'
-  CodeBuildRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      ManagedPolicyArns: [
-        !Ref CreateCodeBuildPolicy
-      ]
-      AssumeRolePolicyDocument:
-        Statement:
-          - Action:
-              - 'sts:AssumeRole'
-            Effect: Allow
-            Principal:
-              Service:
-                - "codebuild.amazonaws.com"
-      Path: /
-      RoleName: CodeBuild_Role_Hugo
-  CreateLambdaExecutionPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: Lambda_Cloudfront_Invalidation
-      Description: "Policy to invalidate Cloudfront Distribution called inside a CodePipeline"
-      Path: "/"
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: VisualEditor0
-            Effect: Allow
-            Action: cloudfront:CreateInvalidation
-            Resource: '*'
-          - Sid: VisualEditor1
-            Effect: Allow
-            Action: [
-              'codepipeline:PutJobSuccessResult',
-              'codepipeline:PutJobFailureResult'
-            ]
-            Resource: '*'
-          - Sid: VisualEditor2
-            Effect: Allow
-            Action: logs:*
-            Resource: '*'
-  LambdaExecutedRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      ManagedPolicyArns: [
-        !Ref CreateLambdaExecutionPolicy
-      ]
-      AssumeRolePolicyDocument:
-        Statement:
-          - Action:
-              - 'sts:AssumeRole'
-            Effect: Allow
-            Principal:
-              Service:
-                - "lambda.amazonaws.com"
-      Path: /
-      RoleName: LambdaExecutedRole_Invalidate
-  LambdaCloudfrontInvalidation:
-    Type: "AWS::Lambda::Function"
-    Properties:
-      Handler: "invalidateCloudFront.lambda_handler"
-      FunctionName: invalidateCloudfront
-      Role:
-        Fn::GetAtt:
-          - "LambdaExecutedRole"
-          - "Arn"
-      Code:
-        S3Bucket: !Ref SourceS3BucketName
-        S3Key: "invalidateCloudFront.zip"
-      Runtime: "python2.7"
-      Timeout: 25
-Outputs:
-  CloudfrontDistID:
-    Description: Cloudfront Distribution
-    Value:
-      !Ref myCloudfrontDist
-    Export:
-      Name: CloudfrontDistID
-  CloudfrontDomainName:
-    Description: Cloudfront Domain Name
-    Value:
-      !GetAtt myCloudfrontDist.DomainName
-    Export:
-      Name: CloudfrontDomainName
+                - Name: BuildArtifact
+     
+  CodeBuildServiceRole:
+      Type: AWS::IAM::Role
+      Properties:
+          AssumeRolePolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Action: 
+                    - 'sts:AssumeRole'
+                  Effect: Allow
+                  Principal:
+                    Service:
+                      - codebuild.amazonaws.com
+          Path: /
+          Policies:
+              - PolicyName: CodeBuildLogs
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                    - 
+                      Effect: Allow
+                      Action:
+                        - 'logs:CreateLogGroup'
+                        - 'logs:CreateLogStream'
+                        - 'logs:PutLogEvents'
+                      Resource:
+                        - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/thscan*'
+                        - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/thscan:*'
+              - PolicyName: CodeBuildArtifactsBucket
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                    - 
+                      Effect: Allow
+                      Action: 
+                        - 's3:GetObject'
+                        - 's3:GetObjectVersion'
+                        - 's3:PutObject'
+                      Resource:
+                        - !Sub 'arn:aws:s3:::${PipelineArtifactsBucket}/*'
+                    -
+                      Effect: Allow
+                      Action:
+                        - s3:PutObject*
+                        - s3:ListBucket
+                      Resource:
+                        - !Sub arn:aws:s3:::${PermanentArtifactBucket}
+                        - !Sub arn:aws:s3:::${PermanentArtifactBucket}/*
+                    - 
+                      Effect: Allow
+                      Action:
+                        - cloudformation:CreateChangeSet
+                      Resource:
+                        - "*"               
+              - PolicyName: CodeBuildParameterStore
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                    -
+                      Effect: Allow
+                      Action: 'ssm:GetParameters'
+                      Resource: '*'
+
+  CodePipelineExecutionRole:
+      Type: AWS::IAM::Role
+      Properties:
+          AssumeRolePolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - 
+                  Action: 
+                      - 'sts:AssumeRole'
+                  Effect: Allow
+                  Principal:
+                    Service: 
+                      - codepipeline.amazonaws.com
+          Path: /
+          Policies:
+              - PolicyName: CodePipelineAccess
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                      - 
+                          Effect: Allow
+                          Action:
+                              - 'iam:PassRole'
+                              - 'lambda:InvokeFunction'
+                              - 'lambda:ListFunctions'
+                              - 'lambda:InvokeAsync'
+                          Resource: '*'
+              - PolicyName: CodePipelineCodeAndArtifactsS3Bucket
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                    - 
+                      Effect: Allow
+                      Action: 's3:*'
+                      Resource:
+                        - !Sub 'arn:aws:s3:::${PipelineArtifactsBucket}'
+                        - !Sub 'arn:aws:s3:::${PipelineArtifactsBucket}/*'
+                        - !Sub 'arn:aws:s3:::${SourceBucket}'
+                        - !Sub 'arn:aws:s3:::${SourceBucket}/*'
+
+              - PolicyName: CodePipelineCodeBuildAndCloudformationAccess
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                    - 
+                      Effect: Allow
+                      Action: 
+                        - 'codebuild:StartBuild'
+                        - 'codebuild:BatchGetBuilds'
+                      Resource: 
+                        - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${CodeBuildProject}'
+                    - 
+                      Effect: Allow
+                      Action: 
+                        - 'cloudformation:CreateStack'
+                        - 'cloudformation:DescribeStacks'
+                        - 'cloudformation:DeleteStack'
+                        - 'cloudformation:UpdateStack'
+                        - 'cloudformation:CreateChangeSet'
+                        - 'cloudformation:ExecuteChangeSet'
+                        - 'cloudformation:DeleteChangeSet'
+                        - 'cloudformation:DescribeChangeSet'
+                        - 'cloudformation:SetStackPolicy'
+                        - 'cloudformation:SetStackPolicy'
+                        - 'cloudformation:ValidateTemplate'
+                      Resource: 
+                        - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/thscan*/*'
+                        - !Sub 'arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31'
