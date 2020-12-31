@@ -6,5 +6,5 @@ pip3 install -r requirements.txt
 # pytest
 sam build
 sam package \
-    --s3-bucket permanent-artifactbucket \
+    --s3-bucket permanent-artifacts \
     --output-template-file template.packaged.yaml
