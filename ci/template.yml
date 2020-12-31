@@ -152,6 +152,7 @@ Resources:
                       Effect: Allow
                       Action:
                         - cloudformation:CreateChangeSet
+                        - cloudformation:DescribeChangeSet
                       Resource:
                         - "*"               
               - PolicyName: CodeBuildParameterStore
