@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates a Code Pipeline which build/updates with S3 as Source
+
+Parameters:
+  PermanentArtifactBucket: 
+    Type: String
+    Default: permanent-artifacts
+    Description: The name of the S3 bucket which will keep the artifacts permanently
+
+  
+Resources:
+  PipelineArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+    DeletionPolicy: Delete
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole: !Ref CodeBuildServiceRole
+      Name: BuildContainerForHTML
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        ## https://docs.aws.amazon.com/codebuild/latest/userguide/build-env-ref-available.html
+        Image: aws/codebuild/standard:4.0
+      Source:
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 10
+  
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      ArtifactStore: 
+        Location: !Ref PipelineArtifactsBucket
+        Type: S3
+      Name: thscan-pipeline
+      RoleArn: !GetAtt CodePipelineExecutionRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceCodeRepo
+              ActionTypeId:
+              # More info on Possible Values: https://docs.aws.amazon.com/codepipeline/latest/userguide/reference-pipeline-structure.html#action-requirements
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: "1"
+              Configuration:
+                S3Bucket: !Ref SourceBucket
+                S3ObjectKey: source.zip
+              OutputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: CodeBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+                EnvironmentVariables: '[{"name":"PIPELINE_STAGE","value":"BUILD","type":"PLAINTEXT"}]'
+              InputArtifacts:
+                - Name: SourceCode
+              OutputArtifacts:
+                - Name: BuildArtifact
+        - Name: Deploy
+          Actions:
+            - Name: CodeBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+                EnvironmentVariables: '[{"name":"PIPELINE_STAGE","value":"DEPLOY","type":"PLAINTEXT"}]'
+              InputArtifacts:
+                - Name: BuildArtifact
+     
+  CodeBuildServiceRole:
+      Type: AWS::IAM::Role
+      Properties:
+          AssumeRolePolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Action: 
+                    - 'sts:AssumeRole'
+                  Effect: Allow
+                  Principal:
+                    Service:
+                      - codebuild.amazonaws.com
+          Path: /
+          Policies:
+              - PolicyName: CodeBuildLogs
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                    - 
+                      Effect: Allow
+                      Action:
+                        - 'logs:CreateLogGroup'
+                        - 'logs:CreateLogStream'
+                        - 'logs:PutLogEvents'
+                      Resource:
+                        - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/thscan*'
+                        - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/thscan:*'
+              - PolicyName: CodeBuildArtifactsBucket
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                    - 
+                      Effect: Allow
+                      Action: 
+                        - 's3:GetObject'
+                        - 's3:GetObjectVersion'
+                        - 's3:PutObject'
+                      Resource:
+                        - !Sub 'arn:aws:s3:::${PipelineArtifactsBucket}/*'
+                    -
+                      Effect: Allow
+                      Action:
+                        - s3:PutObject*
+                        - s3:ListBucket
+                      Resource:
+                        - !Sub arn:aws:s3:::${PermanentArtifactBucket}
+                        - !Sub arn:aws:s3:::${PermanentArtifactBucket}/*
+                    - 
+                      Effect: Allow
+                      Action:
+                        - cloudformation:CreateChangeSet
+                      Resource:
+                        - "*"               
+              - PolicyName: CodeBuildParameterStore
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                    -
+                      Effect: Allow
+                      Action: 'ssm:GetParameters'
+                      Resource: '*'
+
+  CodePipelineExecutionRole:
+      Type: AWS::IAM::Role
+      Properties:
+          AssumeRolePolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - 
+                  Action: 
+                      - 'sts:AssumeRole'
+                  Effect: Allow
+                  Principal:
+                    Service: 
+                      - codepipeline.amazonaws.com
+          Path: /
+          Policies:
+              - PolicyName: CodePipelineAccess
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                      - 
+                          Effect: Allow
+                          Action:
+                              - 'iam:PassRole'
+                              - 'lambda:InvokeFunction'
+                              - 'lambda:ListFunctions'
+                              - 'lambda:InvokeAsync'
+                          Resource: '*'
+              - PolicyName: CodePipelineCodeAndArtifactsS3Bucket
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                    - 
+                      Effect: Allow
+                      Action: 's3:*'
+                      Resource:
+                        - !Sub 'arn:aws:s3:::${PipelineArtifactsBucket}'
+                        - !Sub 'arn:aws:s3:::${PipelineArtifactsBucket}/*'
+                        - !Sub 'arn:aws:s3:::${SourceBucket}'
+                        - !Sub 'arn:aws:s3:::${SourceBucket}/*'
+
+              - PolicyName: CodePipelineCodeBuildAndCloudformationAccess
+                PolicyDocument:
+                  Version: '2012-10-17'
+                  Statement:
+                    - 
+                      Effect: Allow
+                      Action: 
+                        - 'codebuild:StartBuild'
+                        - 'codebuild:BatchGetBuilds'
+                      Resource: 
+                        - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${CodeBuildProject}'
+                    - 
+                      Effect: Allow
+                      Action: 
+                        - 'cloudformation:CreateStack'
+                        - 'cloudformation:DescribeStacks'
+                        - 'cloudformation:DeleteStack'
+                        - 'cloudformation:UpdateStack'
+                        - 'cloudformation:CreateChangeSet'
+                        - 'cloudformation:ExecuteChangeSet'
+                        - 'cloudformation:DeleteChangeSet'
+                        - 'cloudformation:DescribeChangeSet'
+                        - 'cloudformation:SetStackPolicy'
+                        - 'cloudformation:SetStackPolicy'
+                        - 'cloudformation:ValidateTemplate'
+                      Resource: 
+                        - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/thscan*/*'
+                        - !Sub 'arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31'
