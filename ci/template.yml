@@ -35,7 +35,7 @@ Resources:
     Type: AWS::CodeBuild::Project
     Properties:
       ServiceRole: !Ref CodeBuildServiceRole
-      Name: BuildContainerForHTML
+      Name: thscan
       Artifacts:
         Type: CODEPIPELINE
       Environment:
