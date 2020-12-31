@@ -1,0 +1,11 @@
+version: 0.2
+env:
+  shell: bash
+phases:
+  build:
+    commands:
+      - if [[ $PIPELINE_STAGE == "BUILD" ]]; then ./ci/build.sh; fi
+      - if [[ $PIPELINE_STAGE == "DEPLOY" ]]; then ./ci/deploy.sh; fi
+artifacts:
+  files:
+    - '**/*'

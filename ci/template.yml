@@ -45,6 +45,7 @@ Resources:
         Image: aws/codebuild/standard:4.0
       Source:
         Type: CODEPIPELINE
+        BuildSpec: ci/buildspec.yaml
       TimeoutInMinutes: 10
   
   Pipeline:
